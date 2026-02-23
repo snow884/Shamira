@@ -412,6 +412,9 @@ class TestNodePropagation(unittest.TestCase):
 
         self.assertEqual(reconstructed_point_value, 9)  # 5 + 4
 
+    @unittest.skip(
+        "Test depends on open_variable type which has been removed from the codebase"
+    )
     def test_shards_to_open_var(self):
 
         for i in range(NUM_NODES):
@@ -515,8 +518,8 @@ class TestNodePropagation(unittest.TestCase):
         self.assertEqual(decrypted_value, 5 * 9)  # 5 * 9
 
     @unittest.skip(
-        "This test is currently failing due to issues with job execution flow. Needs"
-        " investigation."
+        "Beaver triple multiplication currently has execution flow issues that prevent"
+        " test completion"
     )
     def test_execute_job_multiplication(self):
 
