@@ -118,10 +118,8 @@ class NodeSchema(BaseModel):
 class VariableTypeEnum(enum.Enum):
     none = "none"
     shard = "shard"
-    open_variable = "open_variable"
     private_variable = "private_variable"
     vector_shard = "vector_shard"
-    vector_open_variable = "vector_open_variable"
     vector_private_variable = "vector_private_variable"
 
 
@@ -346,25 +344,6 @@ class ShamiraTask:
                     self.job.steps.append(step)
                     step.hash_id = "hash_step_b_" + str(id(step))
 
-            if variable_type == VariableTypeEnum.open_variable:
-                nodes = self.db.query(Node).order_by(Node.id).all()
-                self.merge_jobs(value)
-                for node in nodes:
-                    step = StepSchema(
-                        status="waiting",
-                        step_type="assign_variable",
-                        parameters='{"source_variable_name": "'
-                        + orig_var_name
-                        + '", "source_variable_type": "'
-                        + value._variable_type.value
-                        + '"}',
-                        variable_name=self._name,
-                        variable_type=self._variable_type,
-                        assigned_node_public_key=node.public_key,
-                        dest_node_public_key=get_current_node(db).public_key,
-                        output_value=None,
-                    )
-                    self.job.steps.append(step)
             if variable_type == VariableTypeEnum.private_variable:
                 if value._variable_type == VariableTypeEnum.private_variable:
                     self.merge_jobs(value)
@@ -451,24 +430,6 @@ class ShamiraTask:
                     )
                     self.job.steps.append(step)
 
-            elif variable_type == VariableTypeEnum.open_variable:
-                # For open variables, just assign the value directly
-                self.job = JobSchema(
-                    name="Define variable " + self._name + " job",
-                    status=JobStatusEnum.waiting,
-                    steps=[],
-                )
-
-                step = StepSchema(
-                    status="waiting",
-                    step_type="init_variable",
-                    variable_name=self._name,
-                    variable_type=self._variable_type,
-                    assigned_node_public_key=get_current_node(db).public_key,
-                    dest_node_public_key=get_current_node(db).public_key,
-                    output_value=str(self._value),
-                )
-                self.job.steps.append(step)
             elif variable_type == VariableTypeEnum.private_variable:
                 self.job = JobSchema(
                     name="Define variable " + self._name + " job",
@@ -536,19 +497,7 @@ class ShamiraTask:
                         ),
                     )
                     self.job.steps.append(step)
-            elif variable_type == VariableTypeEnum.vector_open_variable:
-                # For open variables, just assign the value directly
-                step = StepSchema(
-                    status="waiting",
-                    step_type="init_variable",
-                    variable_name=self._name,
-                    variable_type=self._variable_type,
-                    assigned_node_public_key=get_current_node(db).public_key,
-                    dest_node_public_key=None,
-                    output_value=json.dumps(self._value),
-                )
-                self.job.steps.append(step)
-                step.hash_id = "hash_step_b_" + str(id(step))
+
             elif variable_type == VariableTypeEnum.vector_private_variable:
                 encrypted_value = [
                     encrypt_message(get_current_node(db).public_key, v)
@@ -760,41 +709,6 @@ class ShamiraTask:
                 "(" + self._name + ")" + " * " + "(" + other._name + ")"
             )
             self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            return self
-
-        elif (
-            self._variable_type == VariableTypeEnum.shard
-            and other._variable_type == VariableTypeEnum.open_variable
-        ) or (
-            self._variable_type == VariableTypeEnum.open_variable
-            and other._variable_type == VariableTypeEnum.shard
-        ):
-
-            shard_var = self if self._variable_type == VariableTypeEnum.shard else other
-            open_var = other if shard_var == self else self
-
-            nodes = self.db.query(Node).all()
-            for node in nodes:
-                step = StepSchema(
-                    status="waiting",
-                    step_type="multiply",
-                    parameters='{"variable_a": "'
-                    + shard_var._name
-                    + '", "variable_b": "'
-                    + open_var._name
-                    + '"}',
-                    variable_name="",
-                    variable_type=VariableTypeEnum.shard,
-                    assigned_node_public_key=node.public_key,
-                    dest_node_public_key=node.public_key,
-                    output_value=None,
-                )
-                self.job.steps.append(step)
-                step.variable_name = (
-                    "(" + self._name + ")" + " * " + "(" + other._name + ")"
-                )
-            self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            self._variable_type = VariableTypeEnum.shard
             return self
 
         elif (
@@ -1057,10 +971,7 @@ class ShamiraTask:
         self._name = name
         self._variable_type = variable_type
 
-        if (
-            self._variable_type == VariableTypeEnum.private_variable
-            or self._variable_type == VariableTypeEnum.open_variable
-        ):
+        if self._variable_type == VariableTypeEnum.private_variable:
 
             job = JobSchema(
                 name="Create random private variable " + name + " job",
@@ -1379,9 +1290,7 @@ def get_variable(
 
     public_key, private_key = generate_keypair(keypair_file_path=keypair_file_path)
 
-    if last_step_reference.variable_type == VariableTypeEnum.open_variable:
-        variable_value = last_step_reference.output_value
-    elif last_step_reference.variable_type == VariableTypeEnum.private_variable:
+    if last_step_reference.variable_type == VariableTypeEnum.private_variable:
         encrypted_element = EncryptedFiniteFieldElement(None, None).deserialize(
             last_step_reference.output_value
         )
@@ -1471,11 +1380,7 @@ def set_variable(
         .first()
     )
 
-    if variable_type == VariableTypeEnum.open_variable:
-        current_step_reference.output_value = value
-        current_step_reference.status = StepStatusEnum.completed
-        db.commit()
-    elif variable_type == VariableTypeEnum.private_variable:
+    if variable_type == VariableTypeEnum.private_variable:
         encrypted_value = utils.encrypt_message(value)
         current_step_reference.output_value = encrypted_value
         current_step_reference.status = StepStatusEnum.completed
@@ -1914,36 +1819,6 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
 
                         step.output_value = encrypted_output_value.serialize()
                         step.status = StepStatusEnum.completed
-                    elif step.variable_type == VariableTypeEnum.open_variable:
-                        if not variables_available(
-                            db,
-                            json.loads(step.parameters or "{}"),
-                            VariableTypeEnum.open_variable,
-                        ):
-                            logger.info(
-                                f"Variables not available for step {step.id}, skipping"
-                                " execution for now."
-                            )
-                            return
-                        output_value = (
-                            get_variable(
-                                db,
-                                variable_name_1,
-                                VariableTypeEnum.open_variable,
-                                keypair_file_path=keypair_file_path,
-                            )
-                            * coef_1
-                            + get_variable(
-                                db,
-                                variable_name_2,
-                                VariableTypeEnum.open_variable,
-                                keypair_file_path=keypair_file_path,
-                            )
-                            * coef_2
-                        )
-
-                        step.output_value = output_value
-                        step.status = StepStatusEnum.completed
 
                 if step.step_type == MyStepTypeEnum.multiply:
 
@@ -2023,27 +1898,6 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
 
                         step.output_value = encrypted_output_value.serialize()
                         step.status = StepStatusEnum.completed
-                    elif step.variable_type == VariableTypeEnum.open_variable:
-                        if not variables_available(db, step):
-                            logger.info(
-                                f"Variables not available for step {step.id}, skipping"
-                                " execution for now."
-                            )
-                            return
-                        output_value = get_variable(
-                            db,
-                            variable_name_1,
-                            VariableTypeEnum.open_variable,
-                            keypair_file_path=keypair_file_path,
-                        ) * get_variable(
-                            db,
-                            variable_name_2,
-                            VariableTypeEnum.open_variable,
-                            keypair_file_path=keypair_file_path,
-                        )
-
-                        step.output_value = output_value
-                        step.status = StepStatusEnum.completed
 
                 if step.step_type == MyStepTypeEnum.assign_variable:
 
@@ -2095,35 +1949,6 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             )
 
                             step.output_value = encrypted_output_value.serialize()
-                            step.status = StepStatusEnum.completed
-                        elif step.variable_type == VariableTypeEnum.open_variable:
-
-                            params = (
-                                json.loads(step.parameters) if step.parameters else {}
-                            )
-                            variable_name = params.get("source_variable_name")
-                            source_variable_type_str = params.get(
-                                "source_variable_type", "open_variable"
-                            )
-                            source_variable_type = VariableTypeEnum(
-                                source_variable_type_str
-                            )
-
-                            if not variables_available(db, step):
-                                logger.info(
-                                    f"Variables not available for step {step.id},"
-                                    " skipping execution for now."
-                                )
-                                return
-                            output_value = get_variable(
-                                db,
-                                variable_name,
-                                source_variable_type,
-                                keypair_file_path=keypair_file_path,
-                            )
-
-                            step.output_value = output_value
-                            step.status = StepStatusEnum.completed
                         elif step.variable_type == VariableTypeEnum.shard:
 
                             params = (

@@ -136,7 +136,7 @@ def execute_all_steps(output: ShamiraTask):
                 get_client_session=get_client_session,
                 keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
             )
-
+        uncompleted_tasks_found = False
         for i in range(NUM_NODES):
             db = get_db(f"test_node_{i}")
             propagate_jobs(
@@ -144,6 +144,15 @@ def execute_all_steps(output: ShamiraTask):
                 get_client_session=get_client_session,
                 keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
             )
+
+            all_steps = db.query(Step).all()
+            for step in all_steps:
+                if step.status != StepStatusEnum.completed:
+                    uncompleted_tasks_found = True
+
+        if not uncompleted_tasks_found:
+            print(f"All tasks completed after {j+1} iterations.")
+            break
 
 
 def reconstruct_sharded_value(db, variable_name, public_key_to_node_index):
