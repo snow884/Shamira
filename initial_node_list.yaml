@@ -1,0 +1,16 @@
+nodes:
+  - hostname: node1:8000
+    alias: node1
+    description: test node 1
+    health_status: healthy
+    is_current_node: true
+  - hostname: node2:8000
+    alias: node2
+    description: test node 2
+    health_status: healthy
+    is_current_node: false
+  - hostname: node3:8000
+    alias: node3
+    description: test node 3
+    health_status: healthy
+    is_current_node: false

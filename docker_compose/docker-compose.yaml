@@ -1,0 +1,34 @@
+
+version: "3.8"
+
+networks:
+  shamira-test-network:
+
+
+services:
+
+  client:
+    image: shamira:latest
+    container_name: client
+    hostname: client
+    entrypoint: ["executable", "arg"]
+    networks:
+      - shamira-test-network
+  shamira1:
+    image: shamira:latest
+    container_name: shamira1
+    hostname: node1
+    networks:
+      - shamira-test-network
+  shamira2:
+    image: shamira:latest
+    container_name: shamira2
+    hostname: node2
+    networks:
+      - shamira-test-network
+  shamira3:
+    image: shamira:latest
+    container_name: shamira3
+    hostname: node3
+    networks:
+      - shamira-test-network

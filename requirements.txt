@@ -1,0 +1,9 @@
+fastapi
+fastapi_utils
+httpx
+requests
+pyyaml
+uvicorn
+typing_inspect
+sqlalchemy
+apscheduler
