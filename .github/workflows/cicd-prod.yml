@@ -1,0 +1,45 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: CICD prod
+
+on:
+  push:
+    branches: [ master ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  check_python_code:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4 
+        with:
+          python-version: 'pypy3.10' 
+      - run: "which python"
+      - run: "which python3"
+      - run: "which pip"
+      - run: "which pip3"
+      - run: echo "Update pip..."
+      - run: pip install --upgrade pip
+      - run: echo "Checking that the code for correctness..."
+      - run: echo "Checking that the code is formatted correctly..."
+      - run: pip install pre-commit==2.20.0
+      - run: pre-commit run --all-files 
+
+  run_unit_tests:
+    needs: [check_python_code]
+
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4 
+        with:
+          python-version: 'pypy3.10' 
+      - run: echo "Running unit tests..."
+      - run: pip install --upgrade pip
+      - run: python -m unittest discover -s tests -p "*.py"
