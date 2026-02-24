@@ -368,15 +368,19 @@ class ShamiraTask:
                     self.merge_jobs(value)
                     # switch dest public key on the previous stop to the current node
 
+                    target_public_key = (
+                        dest_node_public_key
+                        if dest_node_public_key
+                        else get_current_node(db).public_key
+                    )
+
                     for s in self.job.steps:
-                        print(s)
-
-                        if (
-                            s.variable_name == orig_var_name
-                            and s.variable_type == "shard"
+                        if s.variable_name == orig_var_name and (
+                            s.variable_type == VariableTypeEnum.shard
+                            or s.variable_type == VariableTypeEnum.shard.value
+                            or s.variable_type == "shard"
                         ):
-
-                            s.dest_node_public_key = get_current_node(db).public_key
+                            s.dest_node_public_key = target_public_key
 
                     step = StepSchema(
                         status="waiting",
@@ -388,8 +392,8 @@ class ShamiraTask:
                         + '"}',
                         variable_name=self._name,
                         variable_type=self._variable_type,
-                        assigned_node_public_key=get_current_node(db).public_key,
-                        dest_node_public_key=get_current_node(db).public_key,
+                        assigned_node_public_key=target_public_key,
+                        dest_node_public_key=target_public_key,
                         output_value=None,
                     )
                     self.job.steps.append(step)
@@ -718,23 +722,38 @@ class ShamiraTask:
 
             a, b, c = self.generate_beaver_tripple()
 
-            delta = type(self)(self.db, f"delta", self - a, VariableTypeEnum.shard)
-            epsilon = type(self)(self.db, f"epsilon", other - b, VariableTypeEnum.shard)
-
             delta_for_node = {}
             epsilon_for_node = {}
-
-            for node in self.db.query(Node).all():
+            z = {}
+            all_nodes = self.db.query(Node).all()
+            for node in all_nodes:
 
                 delta_for_node[node.public_key] = type(self)(
-                    self.db, f"delta", delta, VariableTypeEnum.private_variable
+                    self.db,
+                    f"delta",
+                    self - a,
+                    VariableTypeEnum.private_variable,
+                    dest_node_public_key=node.public_key,
                 )
 
                 epsilon_for_node[node.public_key] = type(self)(
-                    self.db, f"epsilon", epsilon, VariableTypeEnum.private_variable
+                    self.db,
+                    f"epsilon",
+                    other - b,
+                    VariableTypeEnum.private_variable,
+                    dest_node_public_key=node.public_key,
                 )
 
-                z = type(self)(
+                # a_part[node.public_key] = (a * epsilon_for_node[node.public_key])
+
+                # b_part[node.public_key] = (b * delta_for_node[node.public_key])
+
+                # d_part[node.public_key] = (
+                #         delta_for_node[node.public_key]
+                #         * epsilon_for_node[node.public_key]
+                #     )
+
+                z[node.public_key] = type(self)(
                     self.db,
                     f"z",
                     c
@@ -747,7 +766,12 @@ class ShamiraTask:
                     VariableTypeEnum.shard,
                 )
 
-                return z
+            z_final = z[all_nodes[0].public_key]
+
+            for node in all_nodes[1:]:
+                z_final.merge_jobs(z[node.public_key])
+
+            return z_final
         else:
             raise NotImplementedError(
                 "Only multiplication of shard by non-shard or private variable by"
@@ -1302,6 +1326,7 @@ def get_variable(
                 Step.variable_name == variable_name,
                 Step.variable_type == variable_type,
                 Step.dest_node_public_key == get_current_node(db).public_key,
+                Step.status == StepStatusEnum.completed,
             )
             .all()
         )
@@ -1949,6 +1974,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             )
 
                             step.output_value = encrypted_output_value.serialize()
+                            step.status = StepStatusEnum.completed
                         elif step.variable_type == VariableTypeEnum.shard:
 
                             params = (

@@ -412,10 +412,7 @@ class TestNodePropagation(unittest.TestCase):
 
         self.assertEqual(reconstructed_point_value, 9)  # 5 + 4
 
-    @unittest.skip(
-        "Test depends on open_variable type which has been removed from the codebase"
-    )
-    def test_shards_to_open_var(self):
+    def test_shards_to_private_var(self):
 
         for i in range(NUM_NODES):
             db = get_db(f"test_node_{i}")
@@ -486,7 +483,7 @@ class TestNodePropagation(unittest.TestCase):
         generate_steps_in_db(db, z)
 
         try:
-            execute_all_steps(y)
+            execute_all_steps(z)
         except Exception as e:
             generate_dashboard()
             raise e
@@ -499,7 +496,11 @@ class TestNodePropagation(unittest.TestCase):
 
         steps = (
             db.query(Step)
-            .filter(Step.variable_name == "z", Step.variable_type == "private_variable")
+            .filter(
+                Step.variable_name == "z",
+                Step.variable_type == "private_variable",
+                Step.status == "completed",
+            )
             .all()
         )
 
@@ -517,10 +518,6 @@ class TestNodePropagation(unittest.TestCase):
 
         self.assertEqual(decrypted_value, 5 * 9)  # 5 * 9
 
-    @unittest.skip(
-        "Beaver triple multiplication currently has execution flow issues that prevent"
-        " test completion"
-    )
     def test_execute_job_multiplication(self):
 
         for i in range(NUM_NODES):
@@ -619,7 +616,7 @@ class TestNodePropagation(unittest.TestCase):
 
         steps = (
             db.query(Step)
-            .filter(Step.variable_name == "y", Step.variable_type == "shard")
+            .filter(Step.variable_name == "z", Step.variable_type == "shard")
             .all()
         )
 
