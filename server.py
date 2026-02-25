@@ -26,6 +26,7 @@ from client import ShamiraClient
 from utils import (
     EncryptedFiniteFieldElement,
     FiniteFieldElement,
+    N,
     Point,
     PolynomialPoint,
     encrypt_message,
@@ -441,8 +442,15 @@ class ShamiraTask:
                     steps=[],
                 )
 
+                # Determine the target node's public key
+                target_public_key = (
+                    dest_node_public_key
+                    if dest_node_public_key
+                    else get_current_node(db).public_key
+                )
+
                 encrypted_value = encrypt_message(
-                    Point(None, None).deserialize(get_current_node(db).public_key),
+                    Point(None, None).deserialize(target_public_key),
                     self._value,
                 )
                 step = StepSchema(
@@ -450,12 +458,8 @@ class ShamiraTask:
                     step_type=MyStepTypeEnum.init_variable,
                     variable_name=self._name,
                     variable_type=self._variable_type,
-                    assigned_node_public_key=dest_node_public_key
-                    if dest_node_public_key
-                    else get_current_node(db).public_key,
-                    dest_node_public_key=dest_node_public_key
-                    if dest_node_public_key
-                    else get_current_node(db).public_key,
+                    assigned_node_public_key=target_public_key,
+                    dest_node_public_key=target_public_key,
                     output_value=encrypted_value.serialize(),
                 )
                 self.job.steps.append(step)
@@ -537,6 +541,10 @@ class ShamiraTask:
                     + self._name
                     + '", "variable_b": "'
                     + other._name
+                    + '", "variable_a_type": "'
+                    + self._variable_type.value
+                    + '", "variable_b_type": "'
+                    + other._variable_type.value
                     + '"}',
                     variable_name="",
                     variable_type=VariableTypeEnum.shard,
@@ -549,6 +557,8 @@ class ShamiraTask:
                     "(" + self._name + ")" + " + " + "(" + other._name + ")"
                 )
             self._name = "(" + self._name + ")" + " + " + "(" + other._name + ")"
+            # When adding with a shard, the result is always a shard
+            self._variable_type = VariableTypeEnum.shard
         elif (self._variable_type == VariableTypeEnum.private_variable) and (
             other._variable_type == VariableTypeEnum.private_variable
         ):
@@ -591,9 +601,13 @@ class ShamiraTask:
                     + self._name
                     + '", "variable_b": "'
                     + other._name
-                    + '", "coef_1": 1, "coef_2": -1}',
+                    + '", "coef_1": 1, "coef_2": -1, "variable_a_type": "'
+                    + self._variable_type.value
+                    + '", "variable_b_type": "'
+                    + other._variable_type.value
+                    + '"}',
                     variable_name="",
-                    variable_type=self._variable_type,
+                    variable_type=VariableTypeEnum.shard,
                     assigned_node_public_key=node.public_key,
                     dest_node_public_key=node.public_key,
                     output_value=None,
@@ -603,6 +617,8 @@ class ShamiraTask:
                     "(" + self._name + ")" + " - " + "(" + other._name + ")"
                 )
             self._name = "(" + self._name + ")" + " - " + "(" + other._name + ")"
+            # When subtracting with a shard, the result is always a shard
+            self._variable_type = VariableTypeEnum.shard
         elif (self._variable_type == VariableTypeEnum.private_variable) and (
             other._variable_type == VariableTypeEnum.private_variable
         ):
@@ -635,7 +651,11 @@ class ShamiraTask:
         if (
             self._variable_type == VariableTypeEnum.shard
             and other._variable_type == VariableTypeEnum.private_variable
+        ) or (
+            self._variable_type == VariableTypeEnum.private_variable
+            and other._variable_type == VariableTypeEnum.shard
         ):
+            # Handle shard * private or private * shard
             nodes = self.db.query(Node).all()
             for node in nodes:
                 step = StepSchema(
@@ -645,9 +665,13 @@ class ShamiraTask:
                     + self._name
                     + '", "variable_b": "'
                     + other._name
+                    + '", "variable_a_type": "'
+                    + self._variable_type.value
+                    + '", "variable_b_type": "'
+                    + other._variable_type.value
                     + '"}',
                     variable_name="",
-                    variable_type=self._variable_type,
+                    variable_type=VariableTypeEnum.shard,
                     assigned_node_public_key=node.public_key,
                     dest_node_public_key=node.public_key,
                     output_value=None,
@@ -657,6 +681,7 @@ class ShamiraTask:
                     "(" + self._name + ")" + " * " + "(" + other._name + ")"
                 )
             self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
+            self._variable_type = VariableTypeEnum.shard
             return self
         elif (
             self._variable_type == VariableTypeEnum.private_variable
@@ -684,38 +709,6 @@ class ShamiraTask:
             return self
 
         elif (
-            self._variable_type == VariableTypeEnum.private_variable
-            and other._variable_type == VariableTypeEnum.shard
-        ) or (
-            self._variable_type == VariableTypeEnum.shard
-            and other._variable_type == VariableTypeEnum.private_variable
-        ):
-
-            shard_var = self if self._variable_type == VariableTypeEnum.shard else other
-            private_var = other if shard_var == self else self
-
-            step = StepSchema(
-                status="waiting",
-                step_type="multiply",
-                parameters='{"variable_a": "'
-                + shard_var._name
-                + '", "variable_b": "'
-                + private_var._name
-                + '"}',
-                variable_name="",
-                variable_type=VariableTypeEnum.shard,
-                assigned_node_public_key=self.job.steps[-1].assigned_node_public_key,
-                dest_node_public_key=self.job.steps[-1].assigned_node_public_key,
-                output_value=None,
-            )
-            self.job.steps.append(step)
-            step.variable_name = (
-                "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            )
-            self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            return self
-
-        elif (
             self._variable_type == VariableTypeEnum.shard
             and other._variable_type == VariableTypeEnum.shard
         ):
@@ -724,6 +717,7 @@ class ShamiraTask:
 
             delta_for_node = {}
             epsilon_for_node = {}
+            c_part_for_node = {}
             z = {}
             all_nodes = self.db.query(Node).all()
             for node in all_nodes:
@@ -744,6 +738,14 @@ class ShamiraTask:
                     dest_node_public_key=node.public_key,
                 )
 
+                c_part_for_node[node.public_key] = type(self)(
+                    self.db,
+                    f"c_part",
+                    delta_for_node[node.public_key] * epsilon_for_node[node.public_key],
+                    VariableTypeEnum.private_variable,
+                    dest_node_public_key=node.public_key,
+                )
+
                 # a_part[node.public_key] = (a * epsilon_for_node[node.public_key])
 
                 # b_part[node.public_key] = (b * delta_for_node[node.public_key])
@@ -753,25 +755,44 @@ class ShamiraTask:
                 #         * epsilon_for_node[node.public_key]
                 #     )
 
-                z[node.public_key] = type(self)(
-                    self.db,
-                    f"z",
-                    c
-                    + (a * epsilon_for_node[node.public_key])
-                    + (b * delta_for_node[node.public_key])
-                    + (
-                        delta_for_node[node.public_key]
-                        * epsilon_for_node[node.public_key]
-                    ),
-                    VariableTypeEnum.shard,
-                )
-
-            z_final = z[all_nodes[0].public_key]
+            a_part = type(self)(
+                self.db,
+                f"a_part",
+                a * delta_for_node[all_nodes[0].public_key],
+                VariableTypeEnum.shard,
+            )
 
             for node in all_nodes[1:]:
-                z_final.merge_jobs(z[node.public_key])
+                a_part.merge_jobs(delta_for_node[node.public_key])
 
-            return z_final
+            b_part = type(self)(
+                self.db,
+                f"b_part",
+                b * epsilon_for_node[all_nodes[0].public_key],
+                VariableTypeEnum.shard,
+            )
+
+            for node in all_nodes[1:]:
+                b_part.merge_jobs(epsilon_for_node[node.public_key])
+
+            z1 = type(self)(
+                self.db,
+                f"z1",
+                c + a_part + b_part,
+                VariableTypeEnum.shard,
+            )
+
+            z2 = type(self)(
+                self.db,
+                f"z2",
+                z1 + c_part_for_node[all_nodes[0].public_key],
+                VariableTypeEnum.shard,
+            )
+
+            for node in all_nodes[1:]:
+                z2.merge_jobs(c_part_for_node[node.public_key])
+
+            return z2
         else:
             raise NotImplementedError(
                 "Only multiplication of shard by non-shard or private variable by"
@@ -1282,14 +1303,12 @@ def variables_available(db: Session, step: Step) -> bool:
 def get_variable(
     db: Session,
     variable_name: str,
-    variable_type: VariableTypeEnum,
     keypair_file_path: str = None,
 ) -> str:
 
     logger.info(
-        "Looking for variable '%s' of type '%s' on node '%s'.",
+        "Looking for variable '%s' on node '%s'.",
         variable_name,
-        variable_type,
         get_current_node(db).hostname,
     )
 
@@ -1297,7 +1316,6 @@ def get_variable(
         db.query(Step)
         .filter(
             Step.variable_name == variable_name,
-            Step.variable_type == variable_type,
             Step.dest_node_public_key == get_current_node(db).public_key,
             Step.status == StepStatusEnum.completed,
         )
@@ -1306,11 +1324,7 @@ def get_variable(
     )
 
     if not last_step_reference:
-
-        raise Exception(
-            f"Variable '{variable_name}' of type '{variable_type}' not found on this"
-            " node."
-        )
+        raise Exception(f"Variable '{variable_name}' not found on this node.")
 
     public_key, private_key = generate_keypair(keypair_file_path=keypair_file_path)
 
@@ -1324,7 +1338,6 @@ def get_variable(
             db.query(Step)
             .filter(
                 Step.variable_name == variable_name,
-                Step.variable_type == variable_type,
                 Step.dest_node_public_key == get_current_node(db).public_key,
                 Step.status == StepStatusEnum.completed,
             )
@@ -1779,22 +1792,38 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             )
                             return
 
-                        output_value = (
-                            get_variable(
-                                db,
-                                variable_name_1,
-                                VariableTypeEnum.shard,
-                                keypair_file_path=keypair_file_path,
-                            )
-                            * coef_1
-                            + get_variable(
-                                db,
-                                variable_name_2,
-                                VariableTypeEnum.shard,
-                                keypair_file_path=keypair_file_path,
-                            )
-                            * coef_2
+                        var1 = get_variable(
+                            db,
+                            variable_name_1,
+                            keypair_file_path=keypair_file_path,
                         )
+                        var2 = get_variable(
+                            db,
+                            variable_name_2,
+                            keypair_file_path=keypair_file_path,
+                        )
+
+                        # Handle mixed types: shard + private or private + shard
+                        if isinstance(var1, PolynomialPoint) and isinstance(
+                            var2, FiniteFieldElement
+                        ):
+                            # shard + private: add scalar to y-coordinate
+                            # Create a new FiniteFieldElement for the sum
+                            new_y = FiniteFieldElement(
+                                (var1.y.value + var2.value * coef_2) % N, N
+                            )
+                            output_value = PolynomialPoint(var1.x, new_y)
+                        elif isinstance(var2, PolynomialPoint) and isinstance(
+                            var1, FiniteFieldElement
+                        ):
+                            # private + shard: add scalar to y-coordinate
+                            new_y = FiniteFieldElement(
+                                (var2.y.value + var1.value * coef_1) % N, N
+                            )
+                            output_value = PolynomialPoint(var2.x, new_y)
+                        else:
+                            # Both same type - use original logic
+                            output_value = var1 * coef_1 + var2 * coef_2
 
                         output_value_x = encrypt_message(
                             Point(None, None).deserialize(step.dest_node_public_key),
@@ -1824,14 +1853,14 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             get_variable(
                                 db,
                                 variable_name_1,
-                                VariableTypeEnum.private_variable,
+                                # VariableTypeEnum.private_variable,
                                 keypair_file_path=keypair_file_path,
                             )
                             * coef_1
                             + get_variable(
                                 db,
                                 variable_name_2,
-                                VariableTypeEnum.private_variable,
+                                # VariableTypeEnum.private_variable,
                                 keypair_file_path=keypair_file_path,
                             )
                             * coef_2
@@ -1867,17 +1896,38 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                                 " execution for now."
                             )
                             return
-                        output_value = get_variable(
+
+                        var1 = get_variable(
                             db,
                             variable_name_1,
-                            VariableTypeEnum.shard,
-                            keypair_file_path=keypair_file_path,
-                        ) * get_variable(
-                            db,
-                            variable_name_2,
-                            VariableTypeEnum.shard,
                             keypair_file_path=keypair_file_path,
                         )
+                        var2 = get_variable(
+                            db,
+                            variable_name_2,
+                            keypair_file_path=keypair_file_path,
+                        )
+
+                        # Handle mixed types: shard * private or private * shard
+                        if isinstance(var1, PolynomialPoint) and isinstance(
+                            var2, FiniteFieldElement
+                        ):
+                            # shard * private_scalar: multiply y-coordinate by scalar
+                            new_y = FiniteFieldElement(
+                                (var1.y.value * var2.value) % N, N
+                            )
+                            output_value = PolynomialPoint(var1.x, new_y)
+                        elif isinstance(var2, PolynomialPoint) and isinstance(
+                            var1, FiniteFieldElement
+                        ):
+                            # private_scalar * shard: multiply y-coordinate by scalar
+                            new_y = FiniteFieldElement(
+                                (var2.y.value * var1.value) % N, N
+                            )
+                            output_value = PolynomialPoint(var2.x, new_y)
+                        else:
+                            # Both same type - use original logic
+                            output_value = var1 * var2
 
                         output_value_x = encrypt_message(
                             Point(None, None).deserialize(step.dest_node_public_key),
@@ -1907,12 +1957,12 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                         output_value = get_variable(
                             db,
                             variable_name_1,
-                            VariableTypeEnum.private_variable,
+                            # VariableTypeEnum.private_variable,
                             keypair_file_path=keypair_file_path,
                         ) * get_variable(
                             db,
                             variable_name_2,
-                            VariableTypeEnum.private_variable,
+                            # VariableTypeEnum.private_variable,
                             keypair_file_path=keypair_file_path,
                         )
 
@@ -1962,7 +2012,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             output_value = get_variable(
                                 db,
                                 variable_name,
-                                source_variable_type,
+                                # source_variable_type,
                                 keypair_file_path=keypair_file_path,
                             )
 
@@ -1997,7 +2047,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             output_value = get_variable(
                                 db,
                                 variable_name,
-                                source_variable_type,
+                                # source_variable_type,
                                 keypair_file_path=keypair_file_path,
                             )
 
@@ -2044,7 +2094,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             output_value = get_variable(
                                 db,
                                 variable_name,
-                                source_variable_type,
+                                # source_variable_type,
                                 keypair_file_path=keypair_file_path,
                             )
 
@@ -2106,7 +2156,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                             output_value = get_variable(
                                 db,
                                 variable_name,
-                                source_variable_type,
+                                # source_variable_type,
                                 keypair_file_path=keypair_file_path,
                             )
 
@@ -2138,13 +2188,13 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                     coef = get_variable(
                         db,
                         params.get("coef"),
-                        VariableTypeEnum.private_variable,
+                        # VariableTypeEnum.private_variable,
                         keypair_file_path=keypair_file_path,
                     )
                     intercept = get_variable(
                         db,
                         params.get("intercept"),
-                        VariableTypeEnum.private_variable,
+                        # VariableTypeEnum.private_variable,
                         keypair_file_path=keypair_file_path,
                     )
                     # x = get_variable(db, params.get("x"), VariableTypeEnum.private_variable, keypair_file_path=keypair_file_path)

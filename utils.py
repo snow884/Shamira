@@ -26,6 +26,10 @@ class FiniteFieldElement:
         self.prime = prime
 
     def __add__(self, other):
+        if isinstance(other, PolynomialPoint):
+            other.y.value = other.y.value + self.value
+            return other
+
         return FiniteFieldElement(self.value + other.value, self.prime)
 
     def __radd__(self, other):
@@ -538,6 +542,11 @@ class PolynomialPoint:
         self.y = FiniteFieldElement(int(y_str), P)
 
     def __add__(self, other):
+
+        if isinstance(other, FiniteFieldElement):
+            self.y.value = self.y.value + other.value
+            return self
+
         if self.x != other.x:
             raise ValueError(
                 "Can only add PolynomialPoints with the same x value. self.x = {},"
