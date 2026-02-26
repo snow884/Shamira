@@ -1356,6 +1356,8 @@ def variables_available(db: Session, step: Step) -> bool:
     if step.step_type in [MyStepTypeEnum.assign_variable]:
         source_variable_name = params.get("source_variable_name")
         source_variable_type = params.get("source_variable_type")
+        if isinstance(source_variable_type, str):
+            source_variable_type = VariableTypeEnum(source_variable_type)
 
         last_step_reference = (
             db.query(Step)
@@ -1403,6 +1405,26 @@ def variables_available(db: Session, step: Step) -> bool:
             )
             return False
 
+        if source_variable_type == VariableTypeEnum.shard:
+            total_nodes = db.query(Node).count()
+            completed_shards = (
+                db.query(Step)
+                .filter(
+                    Step.variable_name == source_variable_name,
+                    Step.variable_type == VariableTypeEnum.shard,
+                    Step.status == StepStatusEnum.completed,
+                )
+                .count()
+            )
+            if completed_shards < total_nodes:
+                logger.info(
+                    "Shard variable '%s' not completed on all nodes (%s/%s).",
+                    source_variable_name,
+                    completed_shards,
+                    total_nodes,
+                )
+                return False
+
     return True
 
 
@@ -1440,68 +1462,24 @@ def get_variable(
         )
         variable_value = encrypted_element.decrypt(private_key)
     elif last_step_reference.variable_type == VariableTypeEnum.shard:
-        steps = (
-            db.query(Step)
-            .filter(
-                Step.variable_name == variable_name,
-                Step.dest_node_public_key == get_current_node(db).public_key,
-                Step.status == StepStatusEnum.completed,
+        try:
+            output_x_encrypted = EncryptedFiniteFieldElement(None, None).deserialize(
+                json.loads(last_step_reference.output_value)["x"]
             )
-            .all()
-        )
-        if len(steps) == 1:
-            try:
-                output_x_encrypted = EncryptedFiniteFieldElement(
-                    None, None
-                ).deserialize(json.loads(last_step_reference.output_value)["x"])
-                output_y_encrypted = EncryptedFiniteFieldElement(
-                    None, None
-                ).deserialize(json.loads(last_step_reference.output_value)["y"])
-            except (KeyError, json.JSONDecodeError) as e:
-                logger.error(
-                    f"Failed to parse output_value for shard {variable_name}."
-                    f" output_value={last_step_reference.output_value}, error={e}"
-                )
-                raise
-            output_x = output_x_encrypted.decrypt(private_key)
-            output_y = output_y_encrypted.decrypt(private_key)
-
-            pol = PolynomialPoint(output_x, output_y)
-            return pol
-        elif len(steps) > 1:
-            variable_values = []
-
-            for step in steps:
-                try:
-                    output_x_encrypted = EncryptedFiniteFieldElement(
-                        None, None
-                    ).deserialize(json.loads(step.output_value)["x"])
-                    output_y_encrypted = EncryptedFiniteFieldElement(
-                        None, None
-                    ).deserialize(json.loads(step.output_value)["y"])
-                except (KeyError, json.JSONDecodeError) as e:
-                    logger.error(
-                        f"Failed to parse output_value for shard {variable_name}."
-                        f" output_value={step.output_value}, error={e}"
-                    )
-                    raise
-                output_x = output_x_encrypted.decrypt(private_key)
-                output_y = output_y_encrypted.decrypt(private_key)
-
-                pol = PolynomialPoint(output_x, output_y)
-
-                variable_values.append(pol)
-
-            reconstructed_point = utils.lagrange_interpolation(
-                variable_values, FiniteFieldElement(0, utils.N)
+            output_y_encrypted = EncryptedFiniteFieldElement(None, None).deserialize(
+                json.loads(last_step_reference.output_value)["y"]
             )
-
-            variable_value = reconstructed_point.value
-
-        elif len(steps) == 0:
-            raise Exception(
-                f"No shards found for variable {variable_name} on this node."
+        except (KeyError, json.JSONDecodeError) as e:
+            logger.error(
+                f"Failed to parse output_value for shard {variable_name}."
+                f" output_value={last_step_reference.output_value}, error={e}"
             )
+            raise
+        output_x = output_x_encrypted.decrypt(private_key)
+        output_y = output_y_encrypted.decrypt(private_key)
+
+        pol = PolynomialPoint(output_x, output_y)
+        return pol
 
     return variable_value
 
@@ -1527,9 +1505,26 @@ def reconstruct_sharded_value_for_private(
     nodes = db.query(Node).order_by(Node.id).all()
     public_key_to_index = {node.public_key: idx for idx, node in enumerate(nodes)}
 
+    # Keep only the latest completed step per destination node
+    steps_by_node = {}
+    for step in steps:
+        existing = steps_by_node.get(step.dest_node_public_key)
+        if existing is None or step.id > existing.id:
+            steps_by_node[step.dest_node_public_key] = step
+
+    steps = list(steps_by_node.values())
+
     pol = []
     for step in steps:
         node_index = public_key_to_index.get(step.dest_node_public_key, 0)
+        node = next(
+            (n for n in nodes if n.public_key == step.dest_node_public_key), None
+        )
+        if node and node.hostname and node.hostname.startswith("test_node_"):
+            try:
+                node_index = int(node.hostname.replace("test_node_", ""))
+            except ValueError:
+                pass
         node_keypair_path = keypair_file_path
         if keypair_file_path and "test_node_" in keypair_file_path:
             node_keypair_path = re.sub(
@@ -2320,13 +2315,22 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                                     " skipping execution for now."
                                 )
                                 return
-                            output_value = get_variable(
-                                db,
-                                variable_name,
-                                # source_variable_type,
-                                keypair_file_path=keypair_file_path,
-                            )
-                            print(output_value)
+                            if source_variable_type == VariableTypeEnum.shard:
+                                output_value = reconstruct_sharded_value_for_private(
+                                    db,
+                                    variable_name,
+                                    keypair_file_path=keypair_file_path,
+                                )
+                            else:
+                                output_value = get_variable(
+                                    db,
+                                    variable_name,
+                                    # source_variable_type,
+                                    keypair_file_path=keypair_file_path,
+                                )
+
+                            if isinstance(output_value, FiniteFieldElement):
+                                output_value = output_value.value
 
                             encrypted_output_value = encrypt_message(
                                 Point(None, None).deserialize(

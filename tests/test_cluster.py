@@ -158,17 +158,39 @@ def execute_all_steps(output: ShamiraTask):
 def reconstruct_sharded_value(db, variable_name, public_key_to_node_index):
     steps = (
         db.query(Step)
-        .filter(Step.variable_name == variable_name, Step.variable_type == "shard")
+        .filter(
+            Step.variable_name == variable_name,
+            Step.variable_type == "shard",
+            Step.status == StepStatusEnum.completed,
+        )
         .all()
     )
 
-    steps_sorted = sorted(
-        steps, key=lambda s: public_key_to_node_index.get(s.dest_node_public_key, 0)
-    )
+    # Keep only the latest completed step per destination node
+    steps_by_node = {}
+    for step in steps:
+        existing = steps_by_node.get(step.dest_node_public_key)
+        if existing is None or step.id > existing.id:
+            steps_by_node[step.dest_node_public_key] = step
+
+    steps = list(steps_by_node.values())
+
+    def _node_index_for_step(step: Step) -> int:
+        node = (
+            db.query(Node).filter(Node.public_key == step.dest_node_public_key).first()
+        )
+        if node and node.hostname and node.hostname.startswith("test_node_"):
+            try:
+                return int(node.hostname.replace("test_node_", ""))
+            except ValueError:
+                pass
+        return public_key_to_node_index.get(step.dest_node_public_key, 0)
+
+    steps_sorted = sorted(steps, key=_node_index_for_step)
 
     pol = []
     for step in steps_sorted:
-        node_index = public_key_to_node_index.get(step.dest_node_public_key, 0)
+        node_index = _node_index_for_step(step)
         _, private_key = generate_keypair(
             keypair_file_path=f"tests/data/test_node_{node_index}_keypair.pem"
         )
@@ -703,37 +725,7 @@ class TestNodePropagation(unittest.TestCase):
         generate_steps_in_db(db, y)
 
         try:
-            for i in range(len(y.job.steps) + 2):
-
-                for i in range(NUM_NODES):
-                    db = get_db(f"test_node_{i}")
-                    propagate_jobs(
-                        db=db,
-                        get_client_session=get_client_session,
-                        keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
-                    )
-
-                for i in range(NUM_NODES):
-                    start_stop_jobs(
-                        db=get_db(f"test_node_{i}"),
-                        get_client_session=get_client_session,
-                        keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
-                    )
-
-                for i in range(NUM_NODES):
-                    db = get_db(f"test_node_{i}")
-                    propagate_jobs(
-                        db=db,
-                        get_client_session=get_client_session,
-                        keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
-                    )
-
-                for i in range(NUM_NODES):
-                    execute_jobs(
-                        db=get_db(f"test_node_{i}"),
-                        get_client_session=get_client_session,
-                        keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
-                    )
+            execute_all_steps(y)
         except Exception as e:
             generate_dashboard()
             raise e
