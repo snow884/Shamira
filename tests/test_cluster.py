@@ -412,6 +412,135 @@ class TestNodePropagation(unittest.TestCase):
 
         self.assertEqual(reconstructed_point_value, 9)  # 5 + 4
 
+    def test_execute_jobs_with_var_reuse_add(self):
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            initial_nodes_override = [
+                {
+                    "hostname": f"test_node_{j}",
+                    "alias": f"Test Node {j}",
+                    "description": f"This is test node {j}",
+                    "is_current_node": True if j == i else False,
+                }
+                for j in range(NUM_NODES)
+            ]
+            load_initial_nodes(
+                db=db,
+                initial_nodes_override=initial_nodes_override,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            propagate_nodes(
+                db=db,
+                get_client_session=get_client_session,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+        db = get_db(f"test_node_0")
+
+        a = ShamiraTask(
+            db,
+            "a",
+            4,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        b = ShamiraTask(
+            db,
+            "b",
+            5,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        c = ShamiraTask(
+            db,
+            "c",
+            6,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        x = ShamiraTask(
+            db,
+            "x",
+            a + b,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        y = ShamiraTask(
+            db,
+            "y",
+            a + c,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        z = ShamiraTask(
+            db,
+            "z",
+            b + c,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        w = ShamiraTask(
+            db,
+            "w",
+            x + y + z,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        generate_steps_in_db(db, w)
+
+        execute_all_steps(w)
+
+        db = get_db(f"test_node_0")
+
+        nodes = db.query(Node).order_by(Node.id).all()
+        public_key_to_node_index = {
+            node.public_key: idx for idx, node in enumerate(nodes)
+        }
+
+        steps = (
+            db.query(Step)
+            .filter(
+                Step.variable_name == "w",
+                Step.variable_type == "shard",
+                Step.status == "completed",
+            )
+            .all()
+        )
+        generate_dashboard()
+        self.assertEqual(
+            len(steps),
+            NUM_NODES,
+            "Number of steps for variable w should be equal to number of nodes",
+        )
+
+        reconstructed_point_value_x = reconstruct_sharded_value(
+            db, "x", public_key_to_node_index
+        )
+        reconstructed_point_value_y = reconstruct_sharded_value(
+            db, "y", public_key_to_node_index
+        )
+        reconstructed_point_value_z = reconstruct_sharded_value(
+            db, "z", public_key_to_node_index
+        )
+        reconstructed_point_value_w = reconstruct_sharded_value(
+            db, "w", public_key_to_node_index
+        )
+
+        self.assertEqual(reconstructed_point_value_x, 5 + 4)
+        self.assertEqual(reconstructed_point_value_y, 6 + 4)
+        self.assertEqual(reconstructed_point_value_z, 5 + 6)
+        self.assertEqual(reconstructed_point_value_w, (5 + 4) + (6 + 4) + (5 + 6))
+
     def test_shards_to_private_var(self):
 
         for i in range(NUM_NODES):
@@ -462,6 +591,7 @@ class TestNodePropagation(unittest.TestCase):
             a + b,
             VariableTypeEnum.private_variable,
             keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+            dest_node_public_key=get_current_node(get_db(f"test_node_0")).public_key,
         )
 
         c = ShamiraTask(
@@ -608,6 +738,8 @@ class TestNodePropagation(unittest.TestCase):
             generate_dashboard()
             raise e
 
+        generate_dashboard()
+
         db = get_db(f"test_node_0")
         nodes = db.query(Node).order_by(Node.id).all()
         public_key_to_node_index = {
@@ -616,7 +748,7 @@ class TestNodePropagation(unittest.TestCase):
 
         steps = (
             db.query(Step)
-            .filter(Step.variable_name == "z", Step.variable_type == "shard")
+            .filter(Step.variable_name == "y", Step.variable_type == "shard")
             .all()
         )
 
@@ -1968,3 +2100,108 @@ class TestNodePropagation(unittest.TestCase):
             * beaver_tripple_values["(Ba_sharded) + (Bb_sharded)"],
             beaver_tripple_values["(Ca_sharded) + (Cb_sharded)"],
         )
+
+    def test_beaver_triple_with_operation(self):
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            initial_nodes_override = [
+                {
+                    "hostname": f"test_node_{j}",
+                    "alias": f"Test Node {j}",
+                    "description": f"This is test node {j}",
+                    "is_current_node": True if j == i else False,
+                }
+                for j in range(NUM_NODES)
+            ]
+            load_initial_nodes(
+                db=db,
+                initial_nodes_override=initial_nodes_override,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            propagate_nodes(
+                db=db,
+                get_client_session=get_client_session,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+        db = get_db(f"test_node_0")
+
+        a, b, c = ShamiraTask(
+            db=db,
+            name="beaver_triple",
+            value=None,
+            variable_type=VariableTypeEnum.shard,
+        ).generate_beaver_tripple()
+
+        d_private = ShamiraTask(
+            db=db,
+            name="d",
+            value=a + b + c,
+            variable_type=VariableTypeEnum.private_variable,
+            dest_node_public_key=get_current_node(get_db(f"test_node_0")).public_key,
+        )
+
+        db_job_data = d_private.job.model_dump(exclude={"steps"})
+        if not db_job_data.get("hash_id"):
+            db_job_data["hash_id"] = f"job-{uuid.uuid4().hex}"
+        db_job = Job(**db_job_data)
+        db.add(db_job)
+        db.commit()
+        db.refresh(db_job)
+
+        all_steps = d_private.job.steps
+
+        for step_schema in all_steps:
+            step_data = step_schema.model_dump()
+            db_step = Step(**step_data)
+            db_step.job_hash_id = db_job.hash_id
+            if not db_step.hash_id:
+                db_step.hash_id = f"step-{uuid.uuid4().hex}"
+            db.add(db_step)
+
+        db.commit()
+        try:
+            execute_all_steps(d_private)
+        except Exception as e:
+            generate_dashboard()
+            raise e
+
+        db = get_db(f"test_node_1")
+
+        generate_dashboard()
+
+        # Create a mapping from public key to node index
+        nodes = db.query(Node).order_by(Node.id).all()
+        public_key_to_node_index = {}
+        for idx, node in enumerate(nodes):
+            public_key_to_node_index[node.public_key] = idx
+
+        all_steps = db.query(Step).all()
+        for step in all_steps:
+            self.assertEqual(
+                step.status,
+                StepStatusEnum.completed,
+                f"Step {step} should be completed",
+            )
+
+        d_step = (
+            db.query(Step)
+            .filter(
+                Step.variable_name == "d",
+                Step.variable_type == VariableTypeEnum.private_variable,
+            )
+            .first()
+        )
+
+        encrypted_value = EncryptedFiniteFieldElement(None, None).deserialize(
+            d_step.output_value
+        )
+        private_key = generate_keypair(
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem"
+        )[1]
+        decrypted_value = encrypted_value.decrypt(private_key).value
+
+        print(decrypted_value)

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import re
 from contextlib import asynccontextmanager
 from time import time
 from typing import List, Optional
@@ -375,14 +376,6 @@ class ShamiraTask:
                         else get_current_node(db).public_key
                     )
 
-                    for s in self.job.steps:
-                        if s.variable_name == orig_var_name and (
-                            s.variable_type == VariableTypeEnum.shard
-                            or s.variable_type == VariableTypeEnum.shard.value
-                            or s.variable_type == "shard"
-                        ):
-                            s.dest_node_public_key = target_public_key
-
                     step = StepSchema(
                         status="waiting",
                         step_type="assign_variable",
@@ -525,7 +518,11 @@ class ShamiraTask:
     def __add__(self, other):
         """Records an addition operation, lazy execution."""
 
-        self.merge_jobs(other)
+        # Create a copy of self to hold the result, without modifying the original
+        result = copy.copy(self)
+        result.job = copy.deepcopy(self.job)
+
+        result.merge_jobs(other)
 
         if (
             self._variable_type == VariableTypeEnum.shard
@@ -552,13 +549,13 @@ class ShamiraTask:
                     dest_node_public_key=node.public_key,
                     output_value=None,
                 )
-                self.job.steps.append(step)
+                result.job.steps.append(step)
                 step.variable_name = (
                     "(" + self._name + ")" + " + " + "(" + other._name + ")"
                 )
-            self._name = "(" + self._name + ")" + " + " + "(" + other._name + ")"
+            result._name = "(" + self._name + ")" + " + " + "(" + other._name + ")"
             # When adding with a shard, the result is always a shard
-            self._variable_type = VariableTypeEnum.shard
+            result._variable_type = VariableTypeEnum.shard
         elif (self._variable_type == VariableTypeEnum.private_variable) and (
             other._variable_type == VariableTypeEnum.private_variable
         ):
@@ -576,16 +573,23 @@ class ShamiraTask:
                 dest_node_public_key=self.job.steps[-1].dest_node_public_key,
                 output_value=None,
             )
-            self.job.steps.append(step)
+            result.job.steps.append(step)
             step.variable_name = (
                 "(" + self._name + ")" + " + " + "(" + other._name + ")"
             )
-            self._name = "(" + self._name + ")" + " + " + "(" + other._name + ")"
-        return self
+            result._name = "(" + self._name + ")" + " + " + "(" + other._name + ")"
+        else:
+            # For other combinations, just return result (which is a copy) unchanged
+            return result
+        return result
 
     def __sub__(self, other):
 
-        self.merge_jobs(other)
+        # Create a copy of self to hold the result, without modifying the original
+        result = copy.copy(self)
+        result.job = copy.deepcopy(self.job)
+
+        result.merge_jobs(other)
 
         if (
             self._variable_type == VariableTypeEnum.shard
@@ -612,13 +616,13 @@ class ShamiraTask:
                     dest_node_public_key=node.public_key,
                     output_value=None,
                 )
-                self.job.steps.append(step)
+                result.job.steps.append(step)
                 step.variable_name = (
                     "(" + self._name + ")" + " - " + "(" + other._name + ")"
                 )
-            self._name = "(" + self._name + ")" + " - " + "(" + other._name + ")"
+            result._name = "(" + self._name + ")" + " - " + "(" + other._name + ")"
             # When subtracting with a shard, the result is always a shard
-            self._variable_type = VariableTypeEnum.shard
+            result._variable_type = VariableTypeEnum.shard
         elif (self._variable_type == VariableTypeEnum.private_variable) and (
             other._variable_type == VariableTypeEnum.private_variable
         ):
@@ -636,17 +640,23 @@ class ShamiraTask:
                 dest_node_public_key=self.job.steps[-1].assigned_node_public_key,
                 output_value=None,
             )
-            self.job.steps.append(step)
+            result.job.steps.append(step)
             step.variable_name = (
                 "(" + self._name + ")" + " - " + "(" + other._name + ")"
             )
-            self._name = "(" + self._name + ")" + " - " + "(" + other._name + ")"
-        return self
+            result._name = "(" + self._name + ")" + " - " + "(" + other._name + ")"
+        else:
+            return result
+        return result
 
     def __mul__(self, other):
         """Records a multiplication operation, lazy execution."""
 
-        self.merge_jobs(other)
+        # Create a copy of self to hold the result, without modifying the original
+        result = copy.copy(self)
+        result.job = copy.deepcopy(self.job)
+
+        result.merge_jobs(other)
 
         if (
             self._variable_type == VariableTypeEnum.shard
@@ -676,13 +686,13 @@ class ShamiraTask:
                     dest_node_public_key=node.public_key,
                     output_value=None,
                 )
-                self.job.steps.append(step)
+                result.job.steps.append(step)
                 step.variable_name = (
                     "(" + self._name + ")" + " * " + "(" + other._name + ")"
                 )
-            self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            self._variable_type = VariableTypeEnum.shard
-            return self
+            result._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
+            result._variable_type = VariableTypeEnum.shard
+            return result
         elif (
             self._variable_type == VariableTypeEnum.private_variable
             and other._variable_type == VariableTypeEnum.private_variable
@@ -701,98 +711,194 @@ class ShamiraTask:
                 dest_node_public_key=self.job.steps[-1].assigned_node_public_key,
                 output_value=None,
             )
-            self.job.steps.append(step)
+            result.job.steps.append(step)
             step.variable_name = (
                 "(" + self._name + ")" + " * " + "(" + other._name + ")"
             )
-            self._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
-            return self
+            result._name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
+            return result
 
         elif (
             self._variable_type == VariableTypeEnum.shard
             and other._variable_type == VariableTypeEnum.shard
         ):
+            a, b, c = ShamiraTask(
+                db=self.db,
+                name="beaver_triple",
+                value=None,
+                variable_type=VariableTypeEnum.shard,
+            ).generate_beaver_tripple()
 
-            a, b, c = self.generate_beaver_tripple()
+            self_copy = copy.copy(self)
+            self_copy.db = self.db
+            self_copy.job = copy.deepcopy(self.job)
 
-            delta_for_node = {}
-            epsilon_for_node = {}
-            c_part_for_node = {}
-            z = {}
+            other_copy = copy.copy(other)
+            other_copy.db = self.db
+            other_copy.job = copy.deepcopy(other.job)
+
+            delta_shard = type(self)(
+                self.db,
+                f"delta_shard_{self._name}",
+                self_copy - a,
+                VariableTypeEnum.shard,
+            )
+
+            epsilon_shard = type(self)(
+                self.db,
+                f"epsilon_shard_{other._name}",
+                other_copy - b,
+                VariableTypeEnum.shard,
+            )
+
+            result.merge_jobs(a)
+            result.merge_jobs(b)
+            result.merge_jobs(c)
+            result.merge_jobs(delta_shard)
+            result.merge_jobs(epsilon_shard)
+
+            result_name = "(" + self._name + ")" + " * " + "(" + other._name + ")"
+
             all_nodes = self.db.query(Node).all()
             for node in all_nodes:
+                delta_private_name = f"delta_private_{node.public_key}"
+                epsilon_private_name = f"epsilon_private_{node.public_key}"
 
-                delta_for_node[node.public_key] = type(self)(
-                    self.db,
-                    f"delta",
-                    self - a,
-                    VariableTypeEnum.private_variable,
+                delta_private_step = StepSchema(
+                    status="waiting",
+                    step_type="assign_variable",
+                    parameters='{"source_variable_name": "'
+                    + delta_shard._name
+                    + '", "source_variable_type": "shard"}',
+                    variable_name=delta_private_name,
+                    variable_type=VariableTypeEnum.private_variable,
+                    assigned_node_public_key=node.public_key,
                     dest_node_public_key=node.public_key,
+                    output_value=None,
                 )
+                result.job.steps.append(delta_private_step)
 
-                epsilon_for_node[node.public_key] = type(self)(
-                    self.db,
-                    f"epsilon",
-                    other - b,
-                    VariableTypeEnum.private_variable,
+                epsilon_private_step = StepSchema(
+                    status="waiting",
+                    step_type="assign_variable",
+                    parameters='{"source_variable_name": "'
+                    + epsilon_shard._name
+                    + '", "source_variable_type": "shard"}',
+                    variable_name=epsilon_private_name,
+                    variable_type=VariableTypeEnum.private_variable,
+                    assigned_node_public_key=node.public_key,
                     dest_node_public_key=node.public_key,
+                    output_value=None,
                 )
+                result.job.steps.append(epsilon_private_step)
 
-                c_part_for_node[node.public_key] = type(self)(
-                    self.db,
-                    f"c_part",
-                    delta_for_node[node.public_key] * epsilon_for_node[node.public_key],
-                    VariableTypeEnum.private_variable,
+                a_part_name = f"{result_name}_a_part_{node.public_key}"
+                a_part_step = StepSchema(
+                    status="waiting",
+                    step_type="multiply",
+                    parameters='{"variable_a": "'
+                    + a._name
+                    + '", "variable_b": "'
+                    + epsilon_private_name
+                    + '", "variable_a_type": "shard", "variable_b_type":'
+                    ' "private_variable"}',
+                    variable_name=a_part_name,
+                    variable_type=VariableTypeEnum.shard,
+                    assigned_node_public_key=node.public_key,
                     dest_node_public_key=node.public_key,
+                    output_value=None,
                 )
+                result.job.steps.append(a_part_step)
 
-                # a_part[node.public_key] = (a * epsilon_for_node[node.public_key])
+                b_part_name = f"{result_name}_b_part_{node.public_key}"
+                b_part_step = StepSchema(
+                    status="waiting",
+                    step_type="multiply",
+                    parameters='{"variable_a": "'
+                    + b._name
+                    + '", "variable_b": "'
+                    + delta_private_name
+                    + '", "variable_a_type": "shard", "variable_b_type":'
+                    ' "private_variable"}',
+                    variable_name=b_part_name,
+                    variable_type=VariableTypeEnum.shard,
+                    assigned_node_public_key=node.public_key,
+                    dest_node_public_key=node.public_key,
+                    output_value=None,
+                )
+                result.job.steps.append(b_part_step)
 
-                # b_part[node.public_key] = (b * delta_for_node[node.public_key])
+                temp1_name = f"{result_name}_temp1_{node.public_key}"
+                temp1_step = StepSchema(
+                    status="waiting",
+                    step_type="add",
+                    parameters='{"variable_a": "'
+                    + c._name
+                    + '", "variable_b": "'
+                    + a_part_name
+                    + '", "variable_a_type": "shard", "variable_b_type": "shard"}',
+                    variable_name=temp1_name,
+                    variable_type=VariableTypeEnum.shard,
+                    assigned_node_public_key=node.public_key,
+                    dest_node_public_key=node.public_key,
+                    output_value=None,
+                )
+                result.job.steps.append(temp1_step)
 
-                # d_part[node.public_key] = (
-                #         delta_for_node[node.public_key]
-                #         * epsilon_for_node[node.public_key]
-                #     )
+                temp2_name = f"{result_name}_temp2_{node.public_key}"
+                temp2_step = StepSchema(
+                    status="waiting",
+                    step_type="add",
+                    parameters='{"variable_a": "'
+                    + temp1_name
+                    + '", "variable_b": "'
+                    + b_part_name
+                    + '", "variable_a_type": "shard", "variable_b_type": "shard"}',
+                    variable_name=temp2_name,
+                    variable_type=VariableTypeEnum.shard,
+                    assigned_node_public_key=node.public_key,
+                    dest_node_public_key=node.public_key,
+                    output_value=None,
+                )
+                result.job.steps.append(temp2_step)
 
-            a_part = type(self)(
-                self.db,
-                f"a_part",
-                a * delta_for_node[all_nodes[0].public_key],
-                VariableTypeEnum.shard,
-            )
+                d_part_name = f"{result_name}_d_part_{node.public_key}"
+                d_part_step = StepSchema(
+                    status="waiting",
+                    step_type="multiply",
+                    parameters='{"variable_a": "'
+                    + delta_private_name
+                    + '", "variable_b": "'
+                    + epsilon_private_name
+                    + '"}',
+                    variable_name=d_part_name,
+                    variable_type=VariableTypeEnum.private_variable,
+                    assigned_node_public_key=node.public_key,
+                    dest_node_public_key=node.public_key,
+                    output_value=None,
+                )
+                result.job.steps.append(d_part_step)
 
-            for node in all_nodes[1:]:
-                a_part.merge_jobs(delta_for_node[node.public_key])
+                z_step = StepSchema(
+                    status="waiting",
+                    step_type="add",
+                    parameters='{"variable_a": "'
+                    + temp2_name
+                    + '", "variable_b": "'
+                    + d_part_name
+                    + '", "variable_a_type": "shard", "variable_b_type":'
+                    ' "private_variable"}',
+                    variable_name=result_name,
+                    variable_type=VariableTypeEnum.shard,
+                    assigned_node_public_key=node.public_key,
+                    dest_node_public_key=node.public_key,
+                    output_value=None,
+                )
+                result.job.steps.append(z_step)
 
-            b_part = type(self)(
-                self.db,
-                f"b_part",
-                b * epsilon_for_node[all_nodes[0].public_key],
-                VariableTypeEnum.shard,
-            )
-
-            for node in all_nodes[1:]:
-                b_part.merge_jobs(epsilon_for_node[node.public_key])
-
-            z1 = type(self)(
-                self.db,
-                f"z1",
-                c + a_part + b_part,
-                VariableTypeEnum.shard,
-            )
-
-            z2 = type(self)(
-                self.db,
-                f"z2",
-                z1 + c_part_for_node[all_nodes[0].public_key],
-                VariableTypeEnum.shard,
-            )
-
-            for node in all_nodes[1:]:
-                z2.merge_jobs(c_part_for_node[node.public_key])
-
-            return z2
+            result._name = result_name
+            result._variable_type = VariableTypeEnum.shard
+            return result
         else:
             raise NotImplementedError(
                 "Only multiplication of shard by non-shard or private variable by"
@@ -1398,6 +1504,57 @@ def get_variable(
             )
 
     return variable_value
+
+
+def reconstruct_sharded_value_for_private(
+    db: Session,
+    variable_name: str,
+    keypair_file_path: str = None,
+):
+    steps = (
+        db.query(Step)
+        .filter(
+            Step.variable_name == variable_name,
+            Step.variable_type == VariableTypeEnum.shard,
+            Step.status == StepStatusEnum.completed,
+        )
+        .all()
+    )
+
+    if not steps:
+        raise Exception(f"No shard steps found for variable {variable_name}.")
+
+    nodes = db.query(Node).order_by(Node.id).all()
+    public_key_to_index = {node.public_key: idx for idx, node in enumerate(nodes)}
+
+    pol = []
+    for step in steps:
+        node_index = public_key_to_index.get(step.dest_node_public_key, 0)
+        node_keypair_path = keypair_file_path
+        if keypair_file_path and "test_node_" in keypair_file_path:
+            node_keypair_path = re.sub(
+                r"test_node_\d+_keypair\.pem",
+                f"test_node_{node_index}_keypair.pem",
+                keypair_file_path,
+            )
+
+        _, private_key = generate_keypair(keypair_file_path=node_keypair_path)
+
+        output_x_encrypted = EncryptedFiniteFieldElement(None, None).deserialize(
+            json.loads(step.output_value)["x"]
+        )
+        output_y_encrypted = EncryptedFiniteFieldElement(None, None).deserialize(
+            json.loads(step.output_value)["y"]
+        )
+        output_x = output_x_encrypted.decrypt(private_key)
+        output_y = output_y_encrypted.decrypt(private_key)
+        pol.append(PolynomialPoint(output_x, output_y))
+
+    reconstructed_point = utils.lagrange_interpolation(
+        pol, FiniteFieldElement(0, utils.N)
+    )
+
+    return reconstructed_point.value
 
 
 def set_variable(
@@ -2009,12 +2166,22 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                                     " skipping execution for now."
                                 )
                                 return
-                            output_value = get_variable(
-                                db,
-                                variable_name,
-                                # source_variable_type,
-                                keypair_file_path=keypair_file_path,
-                            )
+                            if source_variable_type == VariableTypeEnum.shard:
+                                output_value = reconstruct_sharded_value_for_private(
+                                    db,
+                                    variable_name,
+                                    keypair_file_path=keypair_file_path,
+                                )
+                            else:
+                                output_value = get_variable(
+                                    db,
+                                    variable_name,
+                                    # source_variable_type,
+                                    keypair_file_path=keypair_file_path,
+                                )
+
+                            if isinstance(output_value, FiniteFieldElement):
+                                output_value = output_value.value
 
                             encrypted_output_value = encrypt_message(
                                 Point(None, None).deserialize(
@@ -2159,6 +2326,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
                                 # source_variable_type,
                                 keypair_file_path=keypair_file_path,
                             )
+                            print(output_value)
 
                             encrypted_output_value = encrypt_message(
                                 Point(None, None).deserialize(
