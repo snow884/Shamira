@@ -1,6 +1,7 @@
 import copy
 import json
 import uuid
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -755,6 +756,189 @@ class TestNodePropagation(unittest.TestCase):
         )
 
         self.assertEqual(reconstructed_point_value, 20)  # 5 * 4
+
+    def test_execute_job_multiplication_and_addition_shards(self):
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            initial_nodes_override = [
+                {
+                    "hostname": f"test_node_{j}",
+                    "alias": f"Test Node {j}",
+                    "description": f"This is test node {j}",
+                    "is_current_node": True if j == i else False,
+                }
+                for j in range(NUM_NODES)
+            ]
+            load_initial_nodes(
+                db=db,
+                initial_nodes_override=initial_nodes_override,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            propagate_nodes(
+                db=db,
+                get_client_session=get_client_session,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+        db = get_db(f"test_node_0")
+
+        a = ShamiraTask(
+            db,
+            "a",
+            1,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+        b = ShamiraTask(
+            db,
+            "b",
+            3,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+        c = ShamiraTask(
+            db,
+            "c",
+            5,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        y = ShamiraTask(
+            db,
+            "y",
+            (a + b) * c,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        generate_steps_in_db(db, y)
+
+        try:
+            execute_all_steps(y)
+        except Exception as e:
+            generate_dashboard()
+            raise e
+
+        generate_dashboard()
+
+        db = get_db(f"test_node_0")
+        nodes = db.query(Node).order_by(Node.id).all()
+        public_key_to_node_index = {
+            node.public_key: idx for idx, node in enumerate(nodes)
+        }
+
+        steps = (
+            db.query(Step)
+            .filter(Step.variable_name == "y", Step.variable_type == "shard")
+            .all()
+        )
+
+        self.assertEqual(
+            len(steps),
+            NUM_NODES,
+            "Number of steps for variable y should be equal to number of nodes",
+        )
+
+        reconstructed_point_value = reconstruct_sharded_value(
+            db, "y", public_key_to_node_index
+        )
+
+        self.assertEqual(reconstructed_point_value, 20)  # (1 + 3) * 5
+
+    def test_execute_job_multiplication_and_addition_shards_2(self):
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            initial_nodes_override = [
+                {
+                    "hostname": f"test_node_{j}",
+                    "alias": f"Test Node {j}",
+                    "description": f"This is test node {j}",
+                    "is_current_node": True if j == i else False,
+                }
+                for j in range(NUM_NODES)
+            ]
+            load_initial_nodes(
+                db=db,
+                initial_nodes_override=initial_nodes_override,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            propagate_nodes(
+                db=db,
+                get_client_session=get_client_session,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+        db = get_db(f"test_node_0")
+
+        a = ShamiraTask(
+            db,
+            "a",
+            4,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+        b = ShamiraTask(
+            db,
+            "b",
+            5,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+        c = ShamiraTask(
+            db,
+            "c",
+            1,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+        y = ShamiraTask(
+            db,
+            "y",
+            (a * b) + c,
+            VariableTypeEnum.shard,
+            keypair_file_path=f"tests/data/test_node_0_keypair.pem",
+        )
+
+        generate_steps_in_db(db, y)
+
+        try:
+            execute_all_steps(y)
+        except Exception as e:
+            generate_dashboard()
+            raise e
+
+        generate_dashboard()
+
+        db = get_db(f"test_node_0")
+        nodes = db.query(Node).order_by(Node.id).all()
+        public_key_to_node_index = {
+            node.public_key: idx for idx, node in enumerate(nodes)
+        }
+
+        steps = (
+            db.query(Step)
+            .filter(Step.variable_name == "y", Step.variable_type == "shard")
+            .all()
+        )
+
+        self.assertEqual(
+            len(steps),
+            NUM_NODES,
+            "Number of steps for variable y should be equal to number of nodes",
+        )
+
+        reconstructed_point_value = reconstruct_sharded_value(
+            db, "y", public_key_to_node_index
+        )
+
+        self.assertEqual(reconstructed_point_value, 21)  # (4 * 5) + 1
 
     def test_execute_with_shards_hard(self):
 
@@ -2197,3 +2381,116 @@ class TestNodePropagation(unittest.TestCase):
         decrypted_value = encrypted_value.decrypt(private_key).value
 
         print(decrypted_value)
+
+    @mock.patch("server.random.randint", return_value=5)
+    def test_rand_sharded_var_gen(self, mock_randint):
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            initial_nodes_override = [
+                {
+                    "hostname": f"test_node_{j}",
+                    "alias": f"Test Node {j}",
+                    "description": f"This is test node {j}",
+                    "is_current_node": True if j == i else False,
+                }
+                for j in range(NUM_NODES)
+            ]
+            load_initial_nodes(
+                db=db,
+                initial_nodes_override=initial_nodes_override,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+
+        for i in range(NUM_NODES):
+            db = get_db(f"test_node_{i}")
+            propagate_nodes(
+                db=db,
+                get_client_session=get_client_session,
+                keypair_file_path=f"tests/data/test_node_{i}_keypair.pem",
+            )
+        db = get_db(f"test_node_0")
+
+        rand_variable = ShamiraTask(
+            db=db,
+            name="rand_variable",
+            value=None,
+            variable_type=VariableTypeEnum.shard,
+        ).gen_rand_sharded_variable()
+
+        rand_variable = ShamiraTask(
+            db=db,
+            name="rand_variable",
+            value=rand_variable,
+            variable_type=VariableTypeEnum.shard,
+        )
+
+        db_job_data = rand_variable.job.model_dump(exclude={"steps"})
+        if not db_job_data.get("hash_id"):
+            db_job_data["hash_id"] = f"job-{uuid.uuid4().hex}"
+        db_job = Job(**db_job_data)
+        db.add(db_job)
+        db.commit()
+        db.refresh(db_job)
+
+        all_steps = rand_variable.job.steps
+
+        for step_schema in all_steps:
+            step_data = step_schema.model_dump()
+            db_step = Step(**step_data)
+            db_step.job_hash_id = db_job.hash_id
+            if not db_step.hash_id:
+                db_step.hash_id = f"step-{uuid.uuid4().hex}"
+            db.add(db_step)
+
+        db.commit()
+        try:
+            execute_all_steps(rand_variable)
+        except Exception as e:
+            generate_dashboard()
+            raise e
+
+        db = get_db(f"test_node_1")
+
+        generate_dashboard()
+
+        # Create a mapping from public key to node index
+        nodes = db.query(Node).order_by(Node.id).all()
+        public_key_to_node_index = {}
+        for idx, node in enumerate(nodes):
+            public_key_to_node_index[node.public_key] = idx
+
+        all_steps = db.query(Step).all()
+        for step in all_steps:
+            self.assertEqual(
+                step.status,
+                StepStatusEnum.completed,
+                f"Step {step} should be completed",
+            )
+
+        rand_variable_step = (
+            db.query(Step)
+            .filter(
+                Step.variable_name == "rand_variable",
+                Step.variable_type == VariableTypeEnum.shard,
+                Step.status == StepStatusEnum.completed,
+            )
+            .all()
+        )
+
+        self.assertEqual(
+            len(rand_variable_step),
+            NUM_NODES,
+            "Rand variable generation step should be completed for all nodes",
+        )
+
+        reconstructed_point_value = reconstruct_sharded_value(
+            db, "rand_variable", public_key_to_node_index
+        )
+
+        self.assertEqual(
+            reconstructed_point_value,
+            5 * NUM_NODES,
+            "Reconstructed random variable value should be equal to 5 times number of"
+            " nodes",
+        )

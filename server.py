@@ -915,6 +915,47 @@ class ShamiraTask:
 
         return self
 
+    def gen_rand_sharded_variable(self):
+
+        rand_priv_vars = {}
+        rand_shard_vars = {}
+
+        rand_shard = [
+            type(self)(
+                self.db,
+                "rand_shard_var_0",
+                0,
+                VariableTypeEnum.shard,
+            )
+        ]
+
+        for node in self.db.query(Node).all():
+
+            rand_priv_vars[node.public_key] = ShamiraTask.generate_rand_variable(
+                self.db,
+                "rand_priv_var_from_" + node.public_key,
+                VariableTypeEnum.private_variable,
+                source_node_public_key=node.public_key,
+            )
+
+            rand_shard_vars[node.public_key] = type(self)(
+                self.db,
+                "rand_shard_var_from_" + node.public_key,
+                rand_priv_vars[node.public_key],
+                VariableTypeEnum.shard,
+            )
+
+            rand_shard.append(
+                type(self)(
+                    self.db,
+                    "rand_shard_var_sum_" + node.public_key,
+                    rand_shard[-1] + rand_shard_vars[node.public_key],
+                    VariableTypeEnum.shard,
+                )
+            )
+
+        return rand_shard[-1]
+
     def generate_beaver_tripple(self):
         # generate beaver tripp
         """
@@ -1909,7 +1950,7 @@ def execute_jobs(db: Session, get_client_session=None, keypair_file_path=None):
 
                 if step.step_type == MyStepTypeEnum.create_private_random_variable:
 
-                    random_value = random.randint(1, 100)
+                    random_value = random.randint(1, utils.N - 1)
 
                     encrypted_output_value = encrypt_message(
                         Point(None, None).deserialize(step.dest_node_public_key),
@@ -2550,11 +2591,21 @@ def propagate_jobs(db: Session, get_client_session=None, keypair_file_path=None)
 
                         db.commit()
 
-        # for job_hash_id in local_jobs_hash_ids:
-        #     logger.info(f"Propagating local job with hash_id {job_hash_id} to node {node.hostname}")
-        #     job_to_propagate = db.query(Job).filter(Job.hash_id == job_hash_id).first()
-        #     ShamiraClient(node_host=node.hostname, get_session=get_client_session, current_node=get_current_node(db), keypair_file_path=keypair_file_path).create_job(JobSchema.model_validate(job_to_propagate))
-        #     logger.info(f"Propagated local job {job_to_propagate.name} to node {node.hostname}")
+        for job_hash_id in local_jobs_hash_ids:
+            logger.info(
+                f"Propagating local job with hash_id {job_hash_id} to node"
+                f" {node.hostname}"
+            )
+            job_to_propagate = db.query(Job).filter(Job.hash_id == job_hash_id).first()
+            ShamiraClient(
+                node_host=node.hostname,
+                get_session=get_client_session,
+                current_node=get_current_node(db),
+                keypair_file_path=keypair_file_path,
+            ).create_job(JobSchema.model_validate(job_to_propagate))
+            logger.info(
+                f"Propagated local job {job_to_propagate.name} to node {node.hostname}"
+            )
 
 
 def repeated_task() -> None:
